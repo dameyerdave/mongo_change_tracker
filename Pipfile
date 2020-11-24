@@ -5,6 +5,15 @@ name = "pypi"
 
 [packages]
 flask = "*"
+flask-script = "*"
+flask-cors = "*"
+python-dotenv = "*"
+mongoengine = "*"
+pymongo = "*"
+tendo = "*"
+blinker = "*"
+friendlylog = "*"
+blessings = "*"
 
 [dev-packages]
 flake8 = "*"
