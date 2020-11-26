@@ -1,30 +1,121 @@
 import sys
 import pymongo
 import threading
+import time
 import traceback
 import hashlib
 from os.path import join
 from os import environ
 from pathlib import Path
+
 from models.change import Change
 from friendlylog import colored_logger as log
+import re
+from queue import Queue
 
 
 class ChangeTracker:
+    CHANGES_TIMEOUT = 5
+    BULK_SIZE = 100000
+    NUM_FLUSHERS = 8
+
     class __ChangeTracker(threading.Thread):
-        def __init__(self, mongo_uri, collections):
-            super(ChangeTracker.__ChangeTracker, self).__init__(daemon=True)
+
+        class Flusher(threading.Thread):
+            def __init__(self, id, changesQ):
+                super().__init__(daemon=True)
+                self.id = id
+                self.__status = 'idle'
+                self.changesQ = changesQ
+
+            def __handleQ(self, empty=False):
+                # log.debug(f"[{self.id}] Handling change queue...")
+                if not self.changesQ.empty():
+                    changes = []
+                    size = 0
+                    while not self.changesQ.empty():
+                        changes += self.changesQ.get()
+                        if not empty:
+                            if size > ChangeTracker.BULK_SIZE:
+                                break
+                        size += 1
+                    self.__status = 'flushing'
+                    log.info(f"[{self.id}] Flushing {len(changes)} changes...")
+                    Change.objects.insert(changes)
+                    log.info(f"[{self.id}] Flushed {len(changes)} changes.")
+                    self.__status = 'idle'
+
+            def run(self):
+                log.debug(f"[{self.id}] Flusher started.")
+                self.running = True
+                while(self.running):
+                    self.__handleQ()
+                    time.sleep(ChangeTracker.CHANGES_TIMEOUT)
+                log.debug(f"[{self.id}] Flusher stopped.")
+
+            def kill(self):
+                self.running = False
+                self.__status = 'dieing'
+                log.info(f"[{self.id}] Waiting for flush...")
+                self.join()
+                self.__handleQ(True)
+                log.info(f"[{self.id}] Final flush done.")
+                self.__status = 'dead'
+
+            def get_status(self):
+                return self.__status
+
+            def id(self):
+                return self.id
+
+        def __init__(self, mongo_uri, collections, fields):
+            super().__init__(daemon=True)
             self.mongo_uri = mongo_uri
             self.collections = collections
+            self.fields = fields
+            self.lock = threading.Lock()
+            self.changesQ = Queue()
+            self.flushers = [self.Flusher(i, self.changesQ) for i in range(ChangeTracker.NUM_FLUSHERS)]
+            self.__status = 'idle'
+
+        # def set_interval(self, func, sec):
+        #     def func_wrapper():
+        #         self.set_interval(func, sec)
+        #         self.__flush()
+        #     t = threading.Timer(sec, func_wrapper)
+        #     t.start()
+        #     return t
+
+        def match(self, field):
+            for regex in self.fields:
+                if re.match(regex, field):
+                    return True
+            return False
 
         def kill(self):
             self.running = False
+            self.__status = 'dieing'
+            for flusher in self.flushers:
+                flusher.kill()
+            self.__status = 'dead'
+
+        def get_status(self):
+            status = {}
+            status['status'] = self.__status
+            status['queue_size'] = self.changesQ.qsize()
+            status['flushers'] = {}
+            for flusher in self.flushers:
+                status['flushers'][flusher.id] = flusher.get_status()
+            return status
+
+        def __add(self, change):
+            with self.lock:
+                self.changesQ.put(Change.from_change(change))
 
         def run(self):
             if self.mongo_uri is None:
                 return
 
-            self.running = True
             db = pymongo.MongoClient(self.mongo_uri)
             pipeline = [
                 {
@@ -58,30 +149,103 @@ class ChangeTracker:
                 }
             ]
             resume_token = None
+            self.running = True
+            for flusher in self.flushers:
+                flusher.start()
+            self.__status = 'running'
             while self.running:
                 try:
                     with db.watch(pipeline, 'updateLookup', resume_after=resume_token) as stream:
+                        if not self.running:
+                            log.debug("Closeing stream...")
+                            stream.close()
                         for change in stream:
+                            if not self.running:
+                                break
+                            createDoc = False
+                            ignoredFields = []
+
+                            # General changes
                             change['timestamp'] = change['timestamp'].as_datetime().strftime(
-                                    '%Y-%m-%dT%H:%M:%S')
+                                        '%Y-%m-%dT%H:%M:%S')
                             if 'user' not in change:
                                 change['user'] = 'unknown'
-                            if environ.get('CT_DEBUG'):        
-                              if change['type'] == 'update':
-                                log.debug("{timestamp}: user={user} db={db} coll={coll} type={type} doc_id={doc_id} updatedFields={updatedFields} removedFields={removedFields}".format(**change) )
-                              else:
-                                log.debug("{timestamp}: user={user} db={db} coll={coll} type={type} doc_id={doc_id}".format(**change) )
-                            Change.from_change(change)
+                            else:
+                                change['user'] = change['user']
+
+                            # Type specific changes
+                            if change['type'] == 'insert':
+                                # fullDocument = {}
+                                # for field, value in self.flatten_json(change['fullDocument']).items():
+                                #     if self.match(field):
+                                #         fullDocument[field] = value
+                                #         createDoc = True
+                                #     else:
+                                #         ignoredFields.append(field)
+                                change['fullDocument'] = change['fullDocument']
+                                createDoc = True
+                                if environ.get('CT_DEBUG'):
+                                    log.debug("{timestamp}: user={user} db={db} coll={coll} type={type} doc_id={doc_id}".format(**change))
+                            elif change['type'] == 'update':
+                                updatedFields = {}
+                                removedFields = []
+                                for field, value in change['updatedFields'].items():
+                                    if self.match(field):
+                                        updatedFields[field] = value
+                                        createDoc = True
+                                    else:
+                                        ignoredFields.append(field)
+                                for field in change['removedFields']:
+                                    if self.match(field):
+                                        removedFields.append(field)
+                                        createDoc = True
+                                    else:
+                                        ignoredFields.append(field)
+
+                                change['updatedFields'] = updatedFields
+                                change['removedFields'] = removedFields
+                                del change['fullDocument']
+                                if environ.get('CT_DEBUG'):
+                                    log.debug("{timestamp}: user={user} db={db} coll={coll} type={type} doc_id={doc_id} updatedFields={updatedFields} removedFields={removedFields}".format(**change))
+
+                            # If we need to create a change entry
+                            if createDoc:
+                                self.__add(change)
+                            else:
+                                if change['type'] in ['insert', 'update']:
+                                    log.warning("Not tracking change for: {timestamp}: user={user} db={db} coll={coll} type={type} doc_id={doc_id} ignoredFields={ignoredFields}".format(**change, ignoredFields=ignoredFields))
+                                else:
+                                    log.warning("Not tracking change for: {0}".format(change))
                             resume_token = stream.resume_token
                 except Exception as ex:
+                    self.__status = 'error'
                     log.error('!!! ChangeTracker Error !!!')
                     log.error(ex)
                     traceback.print_exc(file=sys.stdout)
                     pass
 
+        @staticmethod
+        def flatten_json(y):
+            out = {}
+
+            def flatten(x, name=''):
+                if type(x) is dict:
+                    for a in x:
+                        flatten(x[a], name + a + '.')
+                elif type(x) is list:
+                    i = 0
+                    for a in x:
+                        flatten(a, name + str(i) + '.')
+                        i += 1
+                else:
+                    out[name[:-1]] = x
+
+            flatten(y)
+            return out
+
     trackers = {}
 
-    def __new__(cls, mongo_uri, collections):
+    def __new__(cls, mongo_uri, collections, fields):
         hash = hashlib.md5(
             (mongo_uri + ''.join(collections)).encode('utf-8')).hexdigest()
         lockFile = join('temp', hash + '.lock')
@@ -90,13 +254,13 @@ class ChangeTracker:
             Path(lockFile).touch()
             if hash not in cls.trackers:
                 log.info(
-                    f"Start change tracker '{hash}' for {mongo_uri}, {', '.join(collections)}")
+                    f"Start change tracker '{hash}' for {mongo_uri}, collections=[{', '.join(collections)}] fields=[{', '.join(fields)}]")
                 cls.trackers[hash] = cls.__ChangeTracker(
-                    mongo_uri, collections)
+                    mongo_uri, collections, fields)
             return cls.trackers[hash]
         else:
             log.warn(
-                f"Change tracker '{hash}'' seams to be already started for {mongo_uri}, {', '.join(collections)}")
+                f"Change tracker '{hash}'' seams to be already started for {mongo_uri}, collections=[{', '.join(collections)}] fields=[{', '.join(fields)}]")
             return cls.__ChangeTracker(None, None)
 
     @classmethod
@@ -107,4 +271,11 @@ class ChangeTracker:
             cls.trackers[hash].kill()
             lockFile = join('temp', hash + '.lock')
             if Path(lockFile).is_file():
-              Path(lockFile).unlink()
+                Path(lockFile).unlink()
+
+    @classmethod
+    def get_status(cls):
+        status = {}
+        for hash in cls.trackers:
+            status[hash] = cls.trackers[hash].get_status()
+        return status
