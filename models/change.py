@@ -1,5 +1,9 @@
 from os import environ
+import re
 from mongoengine import Document, StringField, DateTimeField
+from models.pipelines import Pipelines
+from models.helper import flatten_json
+from config.config import replacement_identifiers
 
 
 class Change(Document):
@@ -24,6 +28,46 @@ class Change(Document):
             'field'
         ]
     }
+
+    @staticmethod
+    def evaluate_field(doc, field):
+        parts = []
+        fields = field.split('.')
+        keys = field.split('.')
+        for idx, key in enumerate(keys):
+            if key.isnumeric():
+                doc = doc[int(key)]
+                identifier = re.sub(r'\.[0-9]+\.', '.X.', '.'.join(fields[:idx]))
+                identifier2 = fields[idx - 1]
+                print(identifier)
+                print(identifier2)
+                if identifier in replacement_identifiers and replacement_identifiers[identifier] in doc:
+                    parts.append(doc[replacement_identifiers[identifier]])
+                elif identifier2 in replacement_identifiers and replacement_identifiers[identifier2] in doc:
+                    parts.append(doc[replacement_identifiers[identifier2]])
+                else:
+                    parts.append('X')
+            else:
+                doc = doc[key]
+                parts.append(key)
+        return '.'.join(parts)
+
+
+    @classmethod
+    def get_changes(cls, db, coll, doc_id):
+        pipeline = Pipelines.CHANGES(db, coll, doc_id)
+        changes = []
+        ret = list(cls.objects.aggregate(pipeline, allowDiskUse=True))[0]
+        initial_document = flatten_json(ret['initial_document'])
+        for change in ret['changes']:
+            changes.append({
+                'timestamp': '',
+                'field': cls.evaluate_field(ret['initial_document'], change['field']),
+                'from': str(initial_document[change['field']]),
+                'to': change['value']
+            })
+        return changes
+
 
     @classmethod
     def from_change(cls, _change):

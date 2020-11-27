@@ -17,7 +17,7 @@ from queue import Queue
 class ChangeTracker:
     CHANGES_TIMEOUT = 5
     BULK_SIZE = 100000
-    NUM_FLUSHERS = 8
+    NUM_FLUSHERS = 1 # TODO Change!
 
     class __ChangeTracker(threading.Thread):
 
@@ -46,12 +46,16 @@ class ChangeTracker:
                     self.__status = 'idle'
 
             def run(self):
-                log.debug(f"[{self.id}] Flusher started.")
-                self.running = True
-                while(self.running):
-                    self.__handleQ()
-                    time.sleep(ChangeTracker.CHANGES_TIMEOUT)
-                log.debug(f"[{self.id}] Flusher stopped.")
+                try:
+                    log.debug(f"[{self.id}] Flusher started.")
+                    self.running = True
+                    while(self.running):
+                        self.__handleQ()
+                        time.sleep(ChangeTracker.CHANGES_TIMEOUT)
+                    log.debug(f"[{self.id}] Flusher stopped.")
+                except Exception as ex:
+                    log.error(ex)
+                    traceback.print_exc(file=sys.stdout)
 
             def kill(self):
                 self.running = False
@@ -115,7 +119,6 @@ class ChangeTracker:
         def run(self):
             if self.mongo_uri is None:
                 return
-
             db = pymongo.MongoClient(self.mongo_uri)
             pipeline = [
                 {
@@ -175,13 +178,6 @@ class ChangeTracker:
 
                             # Type specific changes
                             if change['type'] == 'insert':
-                                # fullDocument = {}
-                                # for field, value in self.flatten_json(change['fullDocument']).items():
-                                #     if self.match(field):
-                                #         fullDocument[field] = value
-                                #         createDoc = True
-                                #     else:
-                                #         ignoredFields.append(field)
                                 change['fullDocument'] = change['fullDocument']
                                 createDoc = True
                                 if environ.get('CT_DEBUG'):
@@ -219,29 +215,9 @@ class ChangeTracker:
                             resume_token = stream.resume_token
                 except Exception as ex:
                     self.__status = 'error'
-                    log.error('!!! ChangeTracker Error !!!')
                     log.error(ex)
                     traceback.print_exc(file=sys.stdout)
                     pass
-
-        @staticmethod
-        def flatten_json(y):
-            out = {}
-
-            def flatten(x, name=''):
-                if type(x) is dict:
-                    for a in x:
-                        flatten(x[a], name + a + '.')
-                elif type(x) is list:
-                    i = 0
-                    for a in x:
-                        flatten(a, name + str(i) + '.')
-                        i += 1
-                else:
-                    out[name[:-1]] = x
-
-            flatten(y)
-            return out
 
     trackers = {}
 

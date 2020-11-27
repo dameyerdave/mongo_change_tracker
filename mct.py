@@ -56,10 +56,9 @@ def get_changes_coll(db, coll):
 
 
 @app.route('/changes/<db>/<coll>/<doc_id>/', methods=['GET'])
-@queryset_respose
 def get_changes_doc_id(db, coll, doc_id):
     from models.change import Change
-    return Change.objects(Q(db=db) & Q(coll=coll) & Q(doc_id=doc_id))
+    return Change.get_changes(db, coll, doc_id)
 
 
 @app.route('/changes/<db>/<coll>/<doc_id>/<field>/', methods=['GET'])
