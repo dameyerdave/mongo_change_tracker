@@ -15,6 +15,7 @@ blinker = "*"
 friendlylog = "*"
 blessings = "*"
 flask-api = "*"
+python-dateutil = "*"
 
 [dev-packages]
 flake8 = "*"
