@@ -17,7 +17,7 @@ from tendo import singleton
 from tendo.singleton import SingleInstanceException
 
 from modules.decorators import queryset_respose
-from modules.helper import colorize_werkzeug
+from flask_add_ons.logging import colorize_werkzeug
 
 # Logging
 logging.basicConfig(level=logging.DEBUG)
@@ -111,7 +111,7 @@ manager.add_command('runserver', server)
 
 if __name__ == "__main__":
     try:
-        load_dotenv()
+        load_dotenv(override=True)
         with app.app_context():
             connectDb()
             if not __dev__:

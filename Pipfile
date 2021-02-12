@@ -16,6 +16,7 @@ friendlylog = "*"
 blessings = "*"
 flask-api = "*"
 python-dateutil = "*"
+flask-add-ons = "*"
 
 [dev-packages]
 flake8 = "*"
