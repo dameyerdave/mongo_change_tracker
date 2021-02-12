@@ -1,0 +1,13 @@
+version: "3.3"
+services:
+  mct:
+    build:
+      context: .
+      network: host
+    hostname: mct
+    expose:
+      - "${CT_PORT}"
+    ports:
+      - "${CT_PORT}:${CT_PORT}"
+    restart: unless-stopped
+    env_file: .env

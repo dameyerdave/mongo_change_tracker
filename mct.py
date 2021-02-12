@@ -109,16 +109,25 @@ server = Server(host=environ.get('CT_HOSTNAME'), port=environ.get('CT_PORT'))
 manager.add_command('runserver', server)
 
 
-if __name__ == "__main__":
+def init():
     try:
         load_dotenv(override=True)
         with app.app_context():
             connectDb()
             if not __dev__:
                 initChangeTracker()
-        manager.run(default_command='runserver')
     except Exception as ex:
         log.error('!!! ChangeTracker Error !!!')
         log.error(ex)
         traceback.print_exc(file=stdout)
         destroy()
+
+
+def gunicorn():
+    init()
+    return app
+
+
+if __name__ == "__main__":
+    init()
+    manager.run(default_command='runserver')

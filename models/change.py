@@ -53,7 +53,7 @@ class Change(Document):
     @staticmethod
     def evaluate_field(doc, field):
         parts = []
-        print(field)
+        # print(field)
         fields = field.split('.')
         keys = field.split('.')
         for idx, key in enumerate(keys):
@@ -96,7 +96,7 @@ class Change(Document):
         pipeline = Pipelines.CHANGES(db, coll, doc_id, args['filter'], args['sortBy'], (args['sortDesc'] == 'true'), int(
             args['perPage']) * (int(args['currentPage']) - 1), int(args['perPage']))
 
-        print(pipeline)
+        # print(pipeline)
 
         changes = []
         ret = list(cls.objects.aggregate(pipeline, allowDiskUse=True))[0]
@@ -168,8 +168,8 @@ class Change(Document):
                             value="N/A"
                         )
                     )
-        else:
-            print('---change---')
-            print(_change)
-            print('---')
+        # else:
+            # print('---change---')
+            # print(_change)
+            # print('---')
         return changes
