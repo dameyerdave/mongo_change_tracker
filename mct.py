@@ -7,8 +7,7 @@ from os import environ
 from sys import exit, stdout
 
 from dotenv import load_dotenv
-from flask import request
-from flask_api import FlaskAPI
+from flask import request, Flask
 from flask_cors import CORS
 from flask_script import Manager, Server
 from friendlylog import colored_logger as log
@@ -35,7 +34,7 @@ if not __dev__:
         exit(1)
 
 
-app = FlaskAPI(__name__)
+app = Flask(__name__)
 CORS(app)
 
 app.config['DEFAULT_RENDERERS'] = [
