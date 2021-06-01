@@ -4,7 +4,7 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-flask = "*"
+flask = "<2.0.0"
 flask-script = "*"
 flask-cors = "*"
 python-dotenv = "*"
